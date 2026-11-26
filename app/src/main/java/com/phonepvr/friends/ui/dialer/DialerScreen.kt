@@ -84,8 +84,11 @@ import com.phonepvr.friends.ui.components.CallTypeBadge
 import com.phonepvr.friends.ui.components.Haptic
 import com.phonepvr.friends.ui.components.PersonAvatar
 import com.phonepvr.friends.ui.components.rememberHaptics
+import com.phonepvr.friends.ui.permissions.CallLogAccessPolicy
+import com.phonepvr.friends.ui.permissions.CallLogAccessRoute
 import com.phonepvr.friends.ui.permissions.PermissionRationaleSheet
 import com.phonepvr.friends.ui.permissions.RestrictedDialerSettingsDialog
+import com.phonepvr.friends.ui.permissions.rememberCallLogAccess
 import com.phonepvr.friends.ui.permissions.rememberPhoneAppRoleRequest
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -107,6 +110,7 @@ fun DialerScreen(
     val scope = rememberCoroutineScope()
     val haptics = rememberHaptics()
     val showPhoneAppBanner by viewModel.showPhoneAppBanner.collectAsStateWithLifecycle()
+    val isPhoneApp by viewModel.phoneApp.collectAsStateWithLifecycle()
 
     // The user may change the phone app in system Settings and come back.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshPhoneAppRole() }
@@ -178,12 +182,21 @@ fun DialerScreen(
     }
 
     if (showRationale) {
+        // Call log only while Bondwidth is the phone app (Google Play's Call Log
+        // policy); otherwise the recents area offers the role instead.
+        val phoneApp = viewModel.refreshPhoneAppRole()
         PermissionRationaleSheet(
             title = "A few phone permissions",
-            body = "Bondwidth needs: read access to your call log (to show " +
-                "recents), read access to your contacts (to label the " +
-                "numbers), and permission to place calls when you tap one. " +
-                "All on-device.",
+            body = if (phoneApp) {
+                "Bondwidth needs: read access to your call log (to show " +
+                    "recents), read access to your contacts (to label the " +
+                    "numbers), and permission to place calls when you tap one. " +
+                    "All on-device."
+            } else {
+                "Bondwidth needs: read access to your contacts (to label the " +
+                    "numbers) and permission to place calls when you tap one. " +
+                    "All on-device."
+            },
             manualFallback = "If you decline, this tab still opens but " +
                 "stays empty until you grant access in system settings.",
             grantLabel = "Grant access",
@@ -191,11 +204,14 @@ fun DialerScreen(
             onGrant = {
                 showRationale = false
                 permissionLauncher.launch(
-                    arrayOf(
-                        Manifest.permission.READ_CALL_LOG,
-                        Manifest.permission.READ_CONTACTS,
-                        Manifest.permission.CALL_PHONE,
-                    ),
+                    CallLogAccessPolicy.requestable(
+                        listOf(
+                            Manifest.permission.READ_CALL_LOG,
+                            Manifest.permission.READ_CONTACTS,
+                            Manifest.permission.CALL_PHONE,
+                        ),
+                        isPhoneApp = phoneApp,
+                    ).toTypedArray(),
                 )
             },
             onManualFallback = { showRationale = false },
@@ -218,7 +234,6 @@ fun DialerScreen(
     var editingFavourites by remember { mutableStateOf(false) }
     var numberPicker by remember { mutableStateOf<CallTarget.Pick?>(null) }
     var confirmDeleteEntry by remember { mutableStateOf<RecentEntry?>(null) }
-    var deleteAfterPermission by remember { mutableStateOf<Long?>(null) }
 
     // The banner's "Make it the phone app" (Block runs its own request in NumberActions).
     var showRestrictedDialog by remember { mutableStateOf(false) }
@@ -228,15 +243,9 @@ fun DialerScreen(
         onRefused = { showRestrictedDialog = true },
     )
 
-    // Deleting a call writes to the log; request WRITE_CALL_LOG, then delete
-    // the confirmed call once it's granted.
-    val writeCallLogPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        val id = deleteAfterPermission
-        deleteAfterPermission = null
-        if (granted && id != null) viewModel.deleteCall(id)
-    }
+    // Deleting a call writes to the log: get WRITE_CALL_LOG through the
+    // phone-app gate, then delete the confirmed call.
+    val withWriteCallLog = rememberCallLogAccess(Manifest.permission.WRITE_CALL_LOG)
 
     numberPicker?.let { pick ->
         NumberPickerSheet(
@@ -302,16 +311,7 @@ fun DialerScreen(
                 TextButton(onClick = {
                     val id = entry.id
                     confirmDeleteEntry = null
-                    val granted = ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.WRITE_CALL_LOG,
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (granted) {
-                        viewModel.deleteCall(id)
-                    } else {
-                        deleteAfterPermission = id
-                        writeCallLogPermissionLauncher.launch(Manifest.permission.WRITE_CALL_LOG)
-                    }
+                    withWriteCallLog { viewModel.deleteCall(id) }
                 }) { Text("Delete") }
             },
             dismissButton = {
@@ -378,11 +378,30 @@ fun DialerScreen(
                 label = "calls-permission",
             ) { granted ->
                 if (!granted) {
-                    EmptyArea(
-                        message = "Bondwidth needs the call-log permission to show your recents.",
-                        actionLabel = "Grant access",
-                        onAction = { showRationale = true },
-                    )
+                    // Only the phone app may ask for call-log access, so outside
+                    // the role the way in is becoming the phone app.
+                    when (
+                        CallLogAccessPolicy.route(
+                            granted = false,
+                            isPhoneApp = isPhoneApp,
+                            canBecomePhoneApp = viewModel.canBecomePhoneApp,
+                        )
+                    ) {
+                        CallLogAccessRoute.ASK_TO_BECOME_PHONE_APP -> EmptyArea(
+                            message = "Make Bondwidth your phone app to see your recents here.",
+                            actionLabel = "Make it the phone app",
+                            onAction = requestPhoneApp,
+                        )
+                        CallLogAccessRoute.UNAVAILABLE -> EmptyArea(
+                            message = "Recents need Bondwidth to be the phone app, " +
+                                "which this device doesn't support.",
+                        )
+                        else -> EmptyArea(
+                            message = "Bondwidth needs the call-log permission to show your recents.",
+                            actionLabel = "Grant access",
+                            onAction = { showRationale = true },
+                        )
+                    }
                 } else if (state.query.isNotBlank()) {
                     ContactSearchResults(
                         results = state.contactResults,

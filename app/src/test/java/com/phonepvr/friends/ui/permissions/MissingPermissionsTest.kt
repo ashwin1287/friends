@@ -19,8 +19,17 @@ class MissingPermissionsTest {
     private val app: Application get() = RuntimeEnvironment.getApplication()
 
     @Test
-    fun freshInstall_everythingIsMissing() {
-        assertEquals(onboardingRuntimePermissions(), missingRuntimePermissions(app))
+    fun freshInstall_asPhoneApp_everythingIsMissing() {
+        assertEquals(onboardingRuntimePermissions(), missingRuntimePermissions(app, isPhoneApp = true))
+    }
+
+    @Test
+    fun notPhoneApp_callLogIsNeverAskedFor() {
+        // Google Play: only the default phone app may request call-log access.
+        val missing = missingRuntimePermissions(app, isPhoneApp = false)
+        assertFalse(Manifest.permission.READ_CALL_LOG in missing)
+        assertFalse(Manifest.permission.WRITE_CALL_LOG in missing)
+        assertTrue(Manifest.permission.READ_CONTACTS in missing)
     }
 
     @Test
@@ -37,13 +46,13 @@ class MissingPermissionsTest {
             Manifest.permission.WRITE_CONTACTS,
             Manifest.permission.POST_NOTIFICATIONS,
         )
-        assertTrue(missingRuntimePermissions(app).isEmpty())
+        assertTrue(missingRuntimePermissions(app, isPhoneApp = true).isEmpty())
     }
 
     @Test
     fun onlyWhatIsStillMissingIsAskedFor() {
         shadowOf(app).grantPermissions(Manifest.permission.READ_CONTACTS)
-        val missing = missingRuntimePermissions(app)
+        val missing = missingRuntimePermissions(app, isPhoneApp = true)
         assertFalse(Manifest.permission.READ_CONTACTS in missing)
         assertTrue(Manifest.permission.READ_CALL_LOG in missing)
     }

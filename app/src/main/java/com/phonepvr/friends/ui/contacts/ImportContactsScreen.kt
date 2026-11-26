@@ -48,7 +48,9 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.phonepvr.friends.data.contacts.DeviceContact
+import com.phonepvr.friends.ui.permissions.CallLogAccessPolicy
 import com.phonepvr.friends.ui.permissions.PermissionRationaleSheet
+import com.phonepvr.friends.ui.permissions.dialerRoleManager
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,8 +62,14 @@ fun ImportContactsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val rationaleAlreadyShown by viewModel.rationaleAlreadyShown.collectAsStateWithLifecycle()
 
-    val requestedPermissions = remember {
-        arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.READ_CALL_LOG)
+    // Call log rides along only while Bondwidth is the phone app: Google Play's
+    // Call Log policy lets no other app ask for it.
+    val isPhoneApp = remember { dialerRoleManager(context).isDefaultDialer() }
+    val requestedPermissions = remember(isPhoneApp) {
+        CallLogAccessPolicy.requestable(
+            listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.READ_CALL_LOG),
+            isPhoneApp = isPhoneApp,
+        ).toTypedArray()
     }
     var hasPermission by remember {
         mutableStateOf(
@@ -92,15 +100,26 @@ fun ImportContactsScreen(
 
     if (showRationale) {
         PermissionRationaleSheet(
-            title = "Two doors, asked once",
-            body = "Contacts — to pull names, numbers, photos, birthdays " +
-                "and anniversaries straight in instead of typing them. " +
-                "Call log — so calls with the people you import auto-fill " +
-                "the timeline in the background, no per-profile tapping. " +
-                "Both reads, both stay on this phone, nothing leaves.",
-            manualFallback = "Decline either or both and the app still " +
-                "works. You'll just add people by hand and log calls " +
-                "yourself.",
+            title = if (isPhoneApp) "Two doors, asked once" else "Access to your contacts",
+            body = if (isPhoneApp) {
+                "Contacts — to pull names, numbers, photos, birthdays " +
+                    "and anniversaries straight in instead of typing them. " +
+                    "Call log — so calls with the people you import auto-fill " +
+                    "the timeline in the background, no per-profile tapping. " +
+                    "Both reads, both stay on this phone, nothing leaves."
+            } else {
+                "Contacts — to pull names, numbers, photos, birthdays " +
+                    "and anniversaries straight in instead of typing them. " +
+                    "It stays on this phone, nothing leaves. Make Bondwidth " +
+                    "your phone app and your calls fill in the timeline too."
+            },
+            manualFallback = if (isPhoneApp) {
+                "Decline either or both and the app still " +
+                    "works. You'll just add people by hand and log calls " +
+                    "yourself."
+            } else {
+                "Decline and the app still works. You'll just add people by hand."
+            },
             grantLabel = "Grant access",
             manualLabel = "I'll do it by hand",
             onGrant = {

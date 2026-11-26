@@ -115,7 +115,8 @@ fun PermissionInfoList(modifier: Modifier = Modifier) {
  * Android grants every one of these by itself when Bondwidth becomes the phone
  * app (the dialer role's phone, contacts and notifications permission sets), so
  * setup asks for the role first and requests these only when something is still
- * missing, or when the user chooses not to make Bondwidth the phone app.
+ * missing, or when the user chooses not to make Bondwidth the phone app. In that
+ * last case the call-log permission is left out: see [CallLogAccessPolicy].
  */
 fun onboardingRuntimePermissions(): List<String> = buildList {
     add(Manifest.permission.READ_CONTACTS)
@@ -129,8 +130,11 @@ fun onboardingRuntimePermissions(): List<String> = buildList {
     }
 }
 
-/** The [onboardingRuntimePermissions] not granted yet. */
-fun missingRuntimePermissions(context: Context): List<String> =
-    onboardingRuntimePermissions().filter {
+/**
+ * The [onboardingRuntimePermissions] not granted yet that may be asked for:
+ * call-log access only while Bondwidth [isPhoneApp] (Google Play's Call Log policy).
+ */
+fun missingRuntimePermissions(context: Context, isPhoneApp: Boolean): List<String> =
+    CallLogAccessPolicy.requestable(onboardingRuntimePermissions(), isPhoneApp).filter {
         ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
     }

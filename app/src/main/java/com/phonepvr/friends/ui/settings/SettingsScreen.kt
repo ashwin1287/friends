@@ -60,6 +60,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.phonepvr.friends.domain.model.ThemeMode
 import com.phonepvr.friends.ui.lock.isAppLockAvailable
 import com.phonepvr.friends.ui.permissions.RestrictedDialerSettingsDialog
+import com.phonepvr.friends.ui.permissions.rememberCallLogAccess
 import com.phonepvr.friends.ui.permissions.rememberPhoneAppRoleRequest
 
 private val LEAD_DAY_OPTIONS = listOf(1, 2, 3, 5, 7, 14, 30)
@@ -120,35 +121,15 @@ fun SettingsScreen(
     ) { destination ->
         if (destination != null) viewModel.exportCallHistory(destination)
     }
-    // Exporting reads the call log; request READ_CALL_LOG first when needed,
-    // then open the file picker on grant.
-    val callLogExportPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) exportCallHistoryLauncher.launch(viewModel.defaultCallHistoryFileName())
-    }
-    // Clearing the log writes to it; request WRITE_CALL_LOG, then clear on grant.
-    val clearCallLogPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) viewModel.clearCallHistory()
-    }
+    // Exporting reads the call log, clearing and importing write to it. Both go
+    // through the phone-app gate (Google Play's Call Log policy), then run.
+    val withReadCallLog = rememberCallLogAccess(Manifest.permission.READ_CALL_LOG)
+    val withWriteCallLog = rememberCallLogAccess(Manifest.permission.WRITE_CALL_LOG)
 
     val importCallHistoryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { source ->
         if (source != null) viewModel.importCallHistory(source)
-    }
-    // Importing inserts into the log; request WRITE_CALL_LOG, then open the
-    // file picker on grant. Mime list is lenient — CSVs report inconsistently.
-    val importCallLogPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        if (granted) {
-            importCallHistoryLauncher.launch(
-                arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*"),
-            )
-        }
     }
 
     // Re-read the default-dialer state every time Settings becomes
@@ -452,14 +433,8 @@ fun SettingsScreen(
                     Text("Save your call log as a CSV file you can keep or re-import later.")
                 },
                 modifier = Modifier.clickable {
-                    val granted = ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.READ_CALL_LOG,
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (granted) {
+                    withReadCallLog {
                         exportCallHistoryLauncher.launch(viewModel.defaultCallHistoryFileName())
-                    } else {
-                        callLogExportPermissionLauncher.launch(Manifest.permission.READ_CALL_LOG)
                     }
                 },
             )
@@ -469,16 +444,11 @@ fun SettingsScreen(
                     Text("Add calls from a previously exported CSV. Skips ones already on this device.")
                 },
                 modifier = Modifier.clickable {
-                    val granted = ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.WRITE_CALL_LOG,
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (granted) {
+                    // Mime list is lenient: CSVs report their type inconsistently.
+                    withWriteCallLog {
                         importCallHistoryLauncher.launch(
                             arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*"),
                         )
-                    } else {
-                        importCallLogPermissionLauncher.launch(Manifest.permission.WRITE_CALL_LOG)
                     }
                 },
             )
@@ -756,15 +726,7 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showClearCallHistoryConfirm = false
-                    val granted = ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.WRITE_CALL_LOG,
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (granted) {
-                        viewModel.clearCallHistory()
-                    } else {
-                        clearCallLogPermissionLauncher.launch(Manifest.permission.WRITE_CALL_LOG)
-                    }
+                    withWriteCallLog { viewModel.clearCallHistory() }
                 }) { Text("Clear") }
             },
             dismissButton = {

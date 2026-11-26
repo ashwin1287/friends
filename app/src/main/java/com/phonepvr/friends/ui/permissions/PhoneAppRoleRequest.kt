@@ -42,7 +42,7 @@ fun rememberPhoneAppRoleRequest(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         val granted = isPhoneApp()
-        val missing = if (granted) missingRuntimePermissions(context) else emptyList()
+        val missing = if (granted) missingRuntimePermissions(context, isPhoneApp = true) else emptyList()
         if (missing.isNotEmpty() &&
             runCatching { leftoverLauncher.launch(missing.toTypedArray()) }.isSuccess
         ) {
