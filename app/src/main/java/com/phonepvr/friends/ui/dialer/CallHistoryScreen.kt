@@ -77,6 +77,7 @@ import com.phonepvr.friends.ui.components.CallTypeBadge
 import com.phonepvr.friends.ui.components.PersonAvatar
 import com.phonepvr.friends.ui.theme.callColor
 import com.phonepvr.friends.ui.permissions.PermissionRationaleSheet
+import com.phonepvr.friends.ui.permissions.rememberCallLogAccess
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
@@ -107,7 +108,6 @@ fun CallHistoryScreen(
     }
     var showCallRationale by remember { mutableStateOf(false) }
     var confirmDeleteCall by remember { mutableStateOf<DeviceCall?>(null) }
-    var deleteAfterPermission by remember { mutableStateOf<Long?>(null) }
 
     // Shows the SIM chooser first on a multi-SIM device with no default.
     val simLauncher = rememberSimCallLauncher(
@@ -128,15 +128,9 @@ fun CallHistoryScreen(
         if (granted) simLauncher.launch(viewModel.number)
     }
 
-    // Deleting a call writes to the log; request WRITE_CALL_LOG, then delete
-    // the call the user confirmed once it's granted.
-    val writeCallLogPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        val id = deleteAfterPermission
-        deleteAfterPermission = null
-        if (granted && id != null) viewModel.deleteCall(id)
-    }
+    // Deleting a call writes to the log: get WRITE_CALL_LOG through the
+    // phone-app gate, then delete the call the user confirmed.
+    val withWriteCallLog = rememberCallLogAccess(Manifest.permission.WRITE_CALL_LOG)
 
     LaunchedEffect(state.placeError) {
         state.placeError?.let { msg ->
@@ -180,16 +174,7 @@ fun CallHistoryScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmDeleteCall = null
-                    val granted = ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.WRITE_CALL_LOG,
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (granted) {
-                        viewModel.deleteCall(call.id)
-                    } else {
-                        deleteAfterPermission = call.id
-                        writeCallLogPermissionLauncher.launch(Manifest.permission.WRITE_CALL_LOG)
-                    }
+                    withWriteCallLog { viewModel.deleteCall(call.id) }
                 }) { Text("Delete") }
             },
             dismissButton = {

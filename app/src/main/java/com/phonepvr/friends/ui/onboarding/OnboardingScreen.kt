@@ -242,18 +242,18 @@ private fun PermissionsSlide(viewModel: OnboardingViewModel) {
 
     // What's still not granted; re-read after every request and on resume (the
     // user may grant things in system Settings and come back).
-    var missing by remember { mutableStateOf(missingRuntimePermissions(context)) }
+    var missing by remember { mutableStateOf(missingRuntimePermissions(context, viewModel.refreshDefaultDialer())) }
     var declined by rememberSaveable { mutableStateOf(false) }
     var showRestrictedDialog by rememberSaveable { mutableStateOf(false) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.refreshDefaultDialer()
-        missing = missingRuntimePermissions(context)
+        missing = missingRuntimePermissions(context, viewModel.refreshDefaultDialer())
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) {
-        missing = missingRuntimePermissions(context)
+        missing = missingRuntimePermissions(context, viewModel.refreshDefaultDialer())
         declined = missing.isNotEmpty()
     }
     // The one-step path, as in other phone apps: becoming the phone app makes
@@ -263,7 +263,7 @@ private fun PermissionsSlide(viewModel: OnboardingViewModel) {
         isPhoneApp = viewModel::refreshDefaultDialer,
         onRefused = { showRestrictedDialog = true },
         onResult = {
-            missing = missingRuntimePermissions(context)
+            missing = missingRuntimePermissions(context, viewModel.refreshDefaultDialer())
             declined = missing.isNotEmpty()
         },
     )
@@ -317,12 +317,20 @@ private fun PermissionsSlide(viewModel: OnboardingViewModel) {
             ) { Text("Make Bondwidth your phone app") }
             Spacer(Modifier.height(4.dp))
             // Fallback for people who keep another phone app: the same permissions,
-            // asked one by one by Android.
+            // asked one by one by Android — except call history, which only the
+            // phone app may ask for (Google Play's Call Log policy).
             if (missing.isNotEmpty()) {
                 TextButton(
                     onClick = { permissionLauncher.launch(missing.toTypedArray()) },
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Keep my phone app, just allow permissions") }
+                Text(
+                    text = "Call history needs Bondwidth as your phone app, so " +
+                        "calls aren't counted automatically until it is.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
             }
             // Up-front explainer: the request above can fail on Android 13+ for
             // apps installed outside an app store because of "restricted

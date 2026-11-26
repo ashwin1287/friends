@@ -58,6 +58,7 @@ import com.phonepvr.friends.domain.review.CallAnalyticsResult
 import com.phonepvr.friends.domain.review.CallBucket
 import com.phonepvr.friends.domain.review.CallPartyStat
 import com.phonepvr.friends.ui.components.PersonAvatar
+import com.phonepvr.friends.ui.permissions.rememberCallLogAccess
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,12 +78,9 @@ fun CallAnalyticsSection(
             ) == PackageManager.PERMISSION_GRANTED,
         )
     }
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        hasCallLog = granted
-        viewModel.onCallLogPermission(granted)
-    }
+    // Through the phone-app gate: outside the role it offers to make Bondwidth
+    // the phone app rather than showing the call-log prompt (Google Play policy).
+    val withReadCallLog = rememberCallLogAccess(Manifest.permission.READ_CALL_LOG)
     androidx.compose.runtime.LaunchedEffect(hasCallLog) {
         viewModel.onCallLogPermission(hasCallLog)
     }
@@ -108,7 +106,12 @@ fun CallAnalyticsSection(
         when (val s = state) {
             CallAnalyticsUiState.Loading -> Unit
             CallAnalyticsUiState.NoPermission -> PermissionCard(
-                onGrant = { permissionLauncher.launch(Manifest.permission.READ_CALL_LOG) },
+                onGrant = {
+                    withReadCallLog {
+                        hasCallLog = true
+                        viewModel.onCallLogPermission(true)
+                    }
+                },
             )
             is CallAnalyticsUiState.Ready -> {
                 if (s.result.isEmpty) {
