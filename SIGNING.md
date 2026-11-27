@@ -101,10 +101,98 @@ If the signing key may have leaked, rotate it:
 Older releases signed with the previous key keep working until uninstalled;
 they just can't be updated by builds signed with the new key.
 
+## G) Google Play: app signing key and upload key
+
+Google Play uses two keys. Keep them apart:
+
+| | App signing key | Upload key |
+| --- | --- | --- |
+| What it is | **our existing release key** (the `SIGNING_*` keystore above) | a separate key used only to send bundles to Play |
+| Who signs with it | Play, when it serves the app to devices; our CI, for the F-Droid/GitHub APK | our CI (`release.yml`), when it signs `Bondwidth-X.Y.Z.aab` |
+| Repository secrets | `SIGNING_*` (unchanged) | `UPLOAD_*` (below) |
+| If it is lost | no more updates on any channel | Play can reset it (Play Console → App integrity → request upload key reset) |
+
+### The rule: our release key is Play's app signing key
+
+Play installs, F-Droid installs and GitHub sideloads only update over each
+other if they carry the same signature. So in **Play App Signing** we upload
+our existing release key **once**, with PEPK. We never let Google generate an
+app signing key: a Google-generated key would give Play installs a different
+signature, and users could not switch between Play and F-Droid without
+uninstalling. The choice is made when the app is first set up in Play
+Console and cannot simply be undone later, so get it right the first time.
+
+One-time upload, on a trusted machine (never in CI):
+
+1. In Play Console, open the app → **Test and release → App integrity → App
+   signing**, choose **Use a different key** (or **Change app signing key**)
+   → **Export and upload a key from Java keystore**. Download `pepk.jar` and
+   the encryption public key (`encryption_public_key.pem`) it offers.
+2. Decode the release keystore from your password-manager backup (step C),
+   e.g. `base64 -d < signing-keystore.b64 > release.jks`.
+3. Run the exact command Play Console shows. It looks like this:
+   ```sh
+   java -jar pepk.jar --keystore=release.jks --alias=bondwidth \
+     --output=encrypted-private-key.zip --include-cert --rsa-aes-encryption \
+     --encryption-key-path=encryption_public_key.pem
+   ```
+4. Upload `encrypted-private-key.zip` in the same dialog, together with the
+   upload certificate from the next section.
+5. Delete `release.jks` and `encrypted-private-key.zip` from that machine.
+6. Check that **App signing key certificate → SHA-256** in Play Console equals
+   the SHA-256 that `release.yml` prints for `AllowedAPKSigningKeys`.
+
+### Create the upload key
+
+Generate it locally with `keytool` (JDK 17+). Use a password manager for the
+password; by convention the store and key passwords are the same:
+
+```sh
+keytool -genkeypair -v \
+  -keystore upload-keystore.jks -storetype PKCS12 \
+  -alias upload -keyalg RSA -keysize 4096 -validity 10000 \
+  -dname "CN=Bondwidth upload key"
+```
+
+Export its certificate for Play Console (step 4 above, or **App integrity →
+Upload key certificate** if app signing is already set up):
+
+```sh
+keytool -export -rfc -keystore upload-keystore.jks -alias upload \
+  -file upload_certificate.pem
+```
+
+### Store four more repository secrets
+
+Under **Settings → Secrets and variables → Actions**:
+
+- `UPLOAD_KEYSTORE_BASE64` — `base64 -i upload-keystore.jks` (macOS) or
+  `base64 -w0 upload-keystore.jks` (Linux), the whole output on one line.
+- `UPLOAD_STORE_PASSWORD` — the keystore password.
+- `UPLOAD_KEY_ALIAS` — `upload`.
+- `UPLOAD_KEY_PASSWORD` — the key password.
+
+Back up `upload-keystore.jks` and its password in your password manager, then
+delete the local copy.
+
+### What CI does with it
+
+For a clean `vX.Y.Z` tag, `release.yml` first builds and attaches the signed
+APK exactly as before. Then it builds `bundleRelease` **without** the
+`SIGNING_*` variables (so Gradle leaves the bundle unsigned, as on F-Droid),
+signs it with `jarsigner` and the upload key, prints the upload certificate's
+SHA-256 in the job log, and attaches `Bondwidth-X.Y.Z.aab`. That SHA-256 must
+match **Upload key certificate** in Play Console. The Gradle signing config is
+not touched, so F-Droid's reproducible APK build is unaffected.
+
+If any `UPLOAD_*` secret is missing, the bundle steps are skipped with a
+warning and the APK release still succeeds.
+
 ## Local development
 
 Local Gradle builds do **not** require the signing secrets. The
 `signingConfigs.debug` block in `app/build.gradle.kts` uses the keystore only
 when all four `SIGNING_*` environment variables are set and the keystore file
 exists (as they are in CI). Locally it falls back to AGP's auto-generated debug
-key.
+key. Without those variables `./gradlew bundleRelease` gives an unsigned
+bundle; the upload key is only ever applied by `release.yml`.
