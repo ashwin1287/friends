@@ -1,4 +1,4 @@
-name: Release APK (signed)
+name: Release APK (signed) + Play bundle
 
 # Builds and publishes the SIGNED release-variant APK for a clean vX.Y.Z tag.
 # This is the binary F-Droid reproduces against: with `Binaries` +
@@ -9,6 +9,14 @@ name: Release APK (signed)
 # Clean release tags only — the experimental `v1.0.0-build.<N>` tags are handled
 # by build.yml and deliberately never trigger this. Use the manual trigger
 # (Run workflow → pick the vX.Y.Z tag) to (re)publish the APK for an existing tag.
+#
+# After the APK is attached, the same job also builds an Android App Bundle for
+# Google Play and signs it with a separate UPLOAD key (UPLOAD_* secrets), then
+# attaches it as Bondwidth-X.Y.Z.aab. Play re-signs it with our release key,
+# which we gave Play once as the app signing key, so Play, F-Droid and GitHub
+# installs share one signature. See SIGNING.md, "Google Play upload key".
+# The AAB steps run after the APK is published and never touch it, so the APK
+# F-Droid reproduces is exactly what it was before.
 on:
   push:
     tags:
@@ -86,3 +94,96 @@ jobs:
           tag_name: ${{ steps.stage.outputs.tag }}
           files: ${{ steps.stage.outputs.apk }}
           fail_on_unmatched_files: true
+
+      # ---- Google Play bundle (signed with the upload key) ------------------
+      # Everything below runs after the APK above is already attached, so a
+      # missing or broken upload key can never hold back the F-Droid release.
+
+      - name: Check upload-key secrets
+        id: upload
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in UPLOAD_KEYSTORE_BASE64 UPLOAD_STORE_PASSWORD UPLOAD_KEY_ALIAS UPLOAD_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::Skipping the Play bundle: missing secret(s):$missing. See SIGNING.md, \"Google Play upload key\"."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$UPLOAD_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned release bundle
+        if: steps.upload.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          # Build the bundle WITHOUT the release key: drop the SIGNING_* variables
+          # so the Gradle release signing config stays unapplied (as on F-Droid)
+          # and the bundle comes out unsigned. jarsigner then signs it with the
+          # upload key alone; a bundle carrying both signatures would be rejected.
+          unset SIGNING_KEYSTORE_PATH SIGNING_STORE_PASSWORD SIGNING_KEY_PASSWORD SIGNING_KEY_ALIAS
+          ./gradlew bundleRelease --stacktrace
+
+      - name: Sign bundle with the upload key
+        if: steps.upload.outputs.ready == 'true'
+        id: aab
+        env:
+          UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SRC="app/build/outputs/bundle/release/app-release.aab"
+          if [ ! -f "$SRC" ]; then
+            echo "::error::Expected a bundle at $SRC. Found:"; ls -R app/build/outputs/bundle || true; exit 1
+          fi
+          ENTRIES="$(unzip -Z1 "$SRC")"
+          if grep -Eq '^META-INF/[^/]+\.(RSA|EC|DSA)$' <<<"$ENTRIES"; then
+            echo "::error::$SRC is already signed; refusing to add the upload key on top."; exit 1
+          fi
+          TAG="${{ steps.stage.outputs.tag }}"
+          OUT="Bondwidth-${TAG#v}.aab"
+          cp "$SRC" "$OUT"
+          # Passwords come from the environment (:env), never the command line.
+          jarsigner \
+            -keystore "$RUNNER_TEMP/upload-keystore.jks" \
+            -storepass:env UPLOAD_STORE_PASSWORD \
+            -keypass:env UPLOAD_KEY_PASSWORD \
+            "$OUT" "$UPLOAD_KEY_ALIAS"
+          # Not -strict: that fails on "no timestamp", which Play doesn't need.
+          VERIFY="$(jarsigner -verify "$OUT")"
+          echo "$VERIFY"
+          grep -q '^jar verified\.' <<<"$VERIFY" || { echo "::error::$OUT did not verify"; exit 1; }
+          echo "aab=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Print upload certificate SHA-256 (must match Play Console)
+        if: steps.upload.outputs.ready == 'true'
+        env:
+          UPLOAD_STORE_PASSWORD: ${{ secrets.UPLOAD_STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          echo "Compare with Play Console → Test and release → App integrity → Upload key certificate:"
+          keytool -list -v \
+            -keystore "$RUNNER_TEMP/upload-keystore.jks" \
+            -storepass:env UPLOAD_STORE_PASSWORD \
+            -alias "$UPLOAD_KEY_ALIAS" | grep -i "SHA256:"
+
+      - name: Attach Play bundle to the release
+        if: steps.upload.outputs.ready == 'true'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ steps.stage.outputs.tag }}
+          files: ${{ steps.aab.outputs.aab }}
+          fail_on_unmatched_files: true
+
+      - name: Remove the upload keystore from the runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload-keystore.jks"

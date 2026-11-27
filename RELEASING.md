@@ -53,17 +53,64 @@ pre-releases, they never take the "Latest" badge from the real release.
    ```
    (Or create the release with that tag in the GitHub UI.) A clean `vX.Y.Z` tag
    runs `release.yml`, which builds the **signed** release APK and attaches
-   `Bondwidth-X.Y.Z.apk` to the release. `build.yml` does not run for tags, so no
-   dev build is added.
+   `Bondwidth-X.Y.Z.apk` to the release. It then attaches the Google Play
+   bundle `Bondwidth-X.Y.Z.aab`, signed with the upload key (skipped with a
+   warning if the `UPLOAD_*` secrets are not set). `build.yml` does not run for
+   tags, so no dev build is added.
 5. **F-Droid takes it from there.** Its `UpdateCheckMode`/`AutoUpdateMode`
    detect the new `vX.Y.Z` tag, build the tagged source unsigned, check that it
    is byte-identical to the APK from step 4 (`Binaries` /
    `AllowedAPKSigningKeys` in the recipe) and publish that signed APK — typically
    within ~24–48h. Nothing to upload.
 
+6. **Upload the bundle to Google Play** (see below).
+
 > Keep `versionName` and the `vX.Y.Z` tag in lockstep. F-Droid reads the
 > version from the committed gradle values at the tagged commit, not from the
 > tag name.
+
+---
+
+## Publishing to Google Play
+
+Play only accepts Android App Bundles (`.aab`) for new apps. Each release tag
+produces one, signed with our **upload key**; Play re-signs what it serves with
+our **release key**, which we gave Play once as the app signing key. That way
+Play, F-Droid and GitHub installs share one signature and the same
+`versionCode`, so they update over each other. Setup and the key rules are in
+`SIGNING.md`, section G.
+
+Before the first Play upload (one-off):
+
+- Set up Play App Signing with **our existing release key** via PEPK. Never let
+  Google generate the app signing key (`SIGNING.md`, section G).
+- Create the upload key and store the four `UPLOAD_*` secrets.
+- Re-run `release.yml` for the current tag (Run workflow → pick the tag) so the
+  release gets its `.aab`.
+
+For each release, after step 4 above:
+
+1. Open the `vX.Y.Z` GitHub release and download `Bondwidth-X.Y.Z.aab`.
+2. In the `release.yml` run's log, check that the upload certificate SHA-256
+   matches **App integrity → Upload key certificate** in Play Console.
+3. In Play Console, **Test and release →** the track you want (internal
+   testing first, then production) **→ Create new release**, upload the
+   `.aab`, paste the text from
+   `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt` as the
+   release notes, and roll it out.
+
+Play rejects a `versionCode` it has already seen, so a release can be uploaded
+only once. That matches our rule of never reusing a `versionCode`.
+
+### To-do: target API 36 for Play
+
+Since **31 August 2026**, Google Play requires new apps and app updates to
+target **Android 16 (API level 36)**. Bondwidth still has `targetSdk = 35`
+(and `compileSdk = 35`) in `app/build.gradle.kts`, so Play Console will refuse
+the bundle until that is raised. Bumping it changes runtime behaviour on
+Android 16 devices and needs its own PR with testing; it is not part of the
+signing setup. F-Droid has no such requirement. Source:
+<https://support.google.com/googleplay/android-developer/answer/11926878>.
 
 ---
 
