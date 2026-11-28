@@ -26,14 +26,19 @@ We work in a fork. Changes go upstream only when a whole feature is done.
 
 - `origin` is the fork, `ashwin1287/friends`. Push branches here and open the
   day-to-day PRs here.
-- `upstream` is the original repo, `phonepvr/friends`. We can't push to it.
-  When a feature is finished, open a PR from the fork into upstream:
+- `upstream` is the original repo, `phonepvr/friends`. We have write access
+  (not admin): we can push, merge PRs and set Actions secrets, but repo
+  settings stay with the owner. We still don't push to upstream `main`
+  directly. When a feature is finished, open a PR from the fork into upstream:
   `gh pr create --repo phonepvr/friends --head ashwin1287:<branch>`.
-  Only the upstream maintainer can merge it. Don't open upstream PRs unless asked.
+  Don't open or merge upstream PRs unless asked.
 - To sync with upstream: `git fetch upstream && git checkout main &&
   git merge upstream/main && git push origin main`.
-- Fork-only files such as this `CLAUDE.md` should not go into upstream PRs
-  unless the maintainer wants them.
+- This `CLAUDE.md` goes upstream along with the rest of the fork's work.
+- Secrets differ per repo: upstream holds the F-Droid `SIGNING_*` key, the
+  fork holds the Play `UPLOAD_*` key (see `SIGNING.md`). A release tag on a
+  repo without the `UPLOAD_*` secrets still ships the APK, but skips the Play
+  bundle with a warning.
 
 ## Build and test
 
@@ -43,8 +48,7 @@ We work in a fork. Changes go upstream only when a whole feature is done.
 ```
 
 - Stack: Kotlin, Jetpack Compose (Material 3), Hilt, Room, DataStore,
-  WorkManager, Glance. JDK 17, minSdk 26, targetSdk 35. Single module: `app/`.
-- Tests live in `app/src/test/`. There are no instrumented tests (`androidTest`)
+  WorkManager, Glance. JDK 17, minSdk 26, targetSdk 35. Single module: `app/`.- Tests live in `app/src/test/`. There are no instrumented tests (`androidTest`)
   yet. Room tests run on the JVM through `sqlite-jdbc`.
   `testing/PermissionEnforcingContentResolver` fakes runtime permissions.
 
